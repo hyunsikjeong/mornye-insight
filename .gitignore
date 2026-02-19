@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+out/
+dist/
+
+# Test artifacts
+.vscode-test/
+
+# Extension packages
+*.vsix
+
+# TypeScript build info
+*.tsbuildinfo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# LLM related
+.cursorrules

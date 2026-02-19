@@ -1,0 +1,52 @@
+{
+    "name": "ds-insight",
+    "displayName": "Data Structure Insight",
+    "description": "Visualizes data structure relationships using Graphviz",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.96.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "ds-insight.showGraph",
+                "title": "Data Structure Insight: Show Graph"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./ && npm run compile:webview",
+        "compile:webview": "esbuild src/webviewMain.ts --bundle --outfile=out/webviewMain.js --platform=browser --format=iife --target=es2020 --tsconfig=tsconfig.webview.json",
+        "watch": "tsc -watch -p ./ & npm run watch:webview",
+        "watch:webview": "esbuild src/webviewMain.ts --bundle --outfile=out/webviewMain.js --platform=browser --format=iife --target=es2020 --tsconfig=tsconfig.webview.json --watch",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src --ignore-pattern src/webviewMain.ts",
+        "test": "vscode-test"
+    },
+    "devDependencies": {
+        "@types/mocha": "^10.0.6",
+        "@types/node": "20.x",
+        "@types/vscode": "^1.96.0",
+        "@types/vscode-webview": "^1.57.5",
+        "@typescript-eslint/eslint-plugin": "^7.1.0",
+        "@typescript-eslint/parser": "^7.1.0",
+        "@vscode/test-cli": "^0.0.8",
+        "@vscode/test-electron": "^2.3.9",
+        "esbuild": "^0.27.3",
+        "eslint": "^8.57.0",
+        "typescript": "^5.3.3"
+    },
+    "dependencies": {
+        "@hpcc-js/wasm": "^2.20.0",
+        "@types/minimatch": "^5.1.2",
+        "d3-graphviz": "^5.4.0",
+        "d3-selection": "^3.0.0",
+        "minimatch": "^10.2.1"
+    }
+}
