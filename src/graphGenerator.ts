@@ -289,8 +289,73 @@ async function crawlRelationships(
                         // CRITICAL: Only proceed if the target definition is inside the current workspace AND not ignored.
                         // We use minimatch to check against files.exclude and search.exclude patterns locally.
                         const workspaceFolder = vscode.workspace.getWorkspaceFolder(targetUri);
+
+                        // Helper for Generic Wrapper Resolution (A<B>)
+                        const tryExpandWrapper = async () => {
+                            if (isWrapper && innerType) {
+                                logger(`    ? Wrapper '${wrapperName}' is external/excluded. Searching workspace for inner type: '${innerType}'...`);
+
+                                const symbolResults = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+                                    'vscode.executeWorkspaceSymbolProvider', innerType
+                                );
+
+                                if (symbolResults && symbolResults.length > 0) {
+                                    // Filter for exact name match and type-like symbols
+                                    const targetSymInfo = symbolResults.find(s =>
+                                        s.name === innerType && isTypeSymbol(s.kind)
+                                    );
+
+                                    if (targetSymInfo) {
+                                        logger(`    ! Found inner type '${innerType}' in workspace: ${targetSymInfo.location.uri.fsPath}`);
+
+                                        const innerUri = targetSymInfo.location.uri;
+
+                                        // Check if *this* file is excluded (just in case)
+                                        const innerFolder = vscode.workspace.getWorkspaceFolder(innerUri);
+                                        const innerRelative = vscode.workspace.asRelativePath(innerUri, false);
+                                        const excludePatterns = loadExcludePatterns();
+                                        const innerExcluded = !innerFolder || excludePatterns.some(p => minimatch(innerRelative, p, { dot: true }));
+
+                                        if (!innerExcluded) {
+                                            const innerDocSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                                                'vscode.executeDocumentSymbolProvider', innerUri
+                                            );
+
+                                            if (innerDocSymbols) {
+                                                const innerPos = targetSymInfo.location.range.start;
+                                                const innerChain = findSymChain(innerDocSymbols, innerPos);
+                                                const innerSym = innerChain[innerChain.length - 1];
+
+                                                if (innerSym && isTypeSymbol(innerSym.kind)) {
+                                                    const targetId = getTypeUniqueId(innerChain, innerUri);
+
+                                                    // FIX: Always create edge even if visited (DAG support)
+                                                    const newEdge: GraphEdge = {
+                                                        from: id,
+                                                        to: targetId,
+                                                        fromField: child.name,
+                                                        type: 'composition',
+                                                        label: wrapperName
+                                                    };
+                                                    edges.push(newEdge);
+                                                    localEdges.push(newEdge);
+
+                                                    if (!visited.has(targetId)) {
+                                                        await crawlRelationships(innerChain, innerUri, allNodes, edges, visited, logger);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        logger(`    x Inner type '${innerType}' not found in workspace symbols.`);
+                                    }
+                                }
+                            }
+                        };
+
                         if (!workspaceFolder) {
                             logger(`    - Skipping external definition: ${targetUri.fsPath}`);
+                            await tryExpandWrapper();
                             continue;
                         }
 
@@ -298,8 +363,10 @@ async function crawlRelationships(
                         const excludePatterns = loadExcludePatterns();
                         const isExcluded = excludePatterns.some(pattern => minimatch(relativePath, pattern, { dot: true }));
 
+
                         if (isExcluded) {
                             logger(`    - Skipping excluded file: ${relativePath}`);
+                            await tryExpandWrapper();
                             continue;
                         }
 
@@ -313,17 +380,19 @@ async function crawlRelationships(
 
                             if (defSym && isTypeSymbol(defSym.kind)) {
                                 const targetId = getTypeUniqueId(defChain, targetUri);
-                                if (!visited.has(targetId)) {
-                                    const newEdge: GraphEdge = {
-                                        from: id,
-                                        to: targetId,
-                                        fromField: child.name,
-                                        type: 'composition',
-                                        label: isWrapper ? wrapperName : undefined
-                                    };
-                                    edges.push(newEdge);
-                                    localEdges.push(newEdge);
 
+                                // FIX: Always create edge even if visited (DAG support)
+                                const newEdge: GraphEdge = {
+                                    from: id,
+                                    to: targetId,
+                                    fromField: child.name,
+                                    type: 'composition',
+                                    label: isWrapper ? wrapperName : undefined
+                                };
+                                edges.push(newEdge);
+                                localEdges.push(newEdge);
+
+                                if (!visited.has(targetId)) {
                                     await crawlRelationships(defChain, targetUri, allNodes, edges, visited, logger);
                                 }
                             } else {
