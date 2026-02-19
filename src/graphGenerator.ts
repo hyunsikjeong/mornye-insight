@@ -10,6 +10,7 @@ interface GraphNode {
     range: vscode.Range;
     children: vscode.DocumentSymbol[];
     fields: string[];
+    outgoingEdges?: GraphEdge[]; // Cached outgoing edges for full expansion
 }
 
 interface GraphEdge {
@@ -40,10 +41,56 @@ function escapeHtml(str: string): string {
         }
     });
 }
+// ─── Caching ──────────────────────────────────────────────────────────────────
+
+class GraphCacheManager {
+    // Raw Cache: Node ID -> GraphNode (contains fields and resolved outgoing edges)
+    private rawCache = new Map<string, GraphNode>();
+
+    // Graph Cache: Root Node ID -> Computed DOT string
+    private graphCache = new Map<string, DotResult>();
+
+    getRaw(id: string): GraphNode | undefined {
+        return this.rawCache.get(id);
+    }
+
+    setRaw(id: string, node: GraphNode) {
+        this.rawCache.set(id, node);
+    }
+
+    getGraph(rootId: string): DotResult | undefined {
+        return this.graphCache.get(rootId);
+    }
+
+    setGraph(rootId: string, result: DotResult) {
+        this.graphCache.set(rootId, result);
+    }
+
+    invalidate(uri: vscode.Uri) {
+        const uriStr = uri.toString();
+        // 1. Invalidate Raw Cache for this file
+        for (const [id, node] of this.rawCache) {
+            // Check if node belongs to this URI (ID starts with uriStr or node.uri matches)
+            if (node.uri.toString() === uriStr) {
+                this.rawCache.delete(id);
+            }
+        }
+
+        // 2. Invalidate Graph Cache (Conservative: clear all, or check dependencies)
+        // For correctness, any change might affect graphs. Clearing all is safest/simplest for now.
+        // Optimization: Could track which graphs depend on which URIs.
+        this.graphCache.clear();
+        logger(`Cache invalidated for ${uriStr}`);
+    }
+}
+
+export const graphCache = new GraphCacheManager();
+let logger: (msg: string) => void = () => { }; // Global logger ref
 
 
 
-export async function generateDot(rootUri: vscode.Uri, extensions: string[], logger: (msg: string) => void): Promise<DotResult> {
+export async function generateDot(rootUri: vscode.Uri, extensions: string[], logFn: (msg: string) => void): Promise<DotResult> {
+    logger = logFn;
     logger(`Starting full workspace scan for ${extensions.join(', ')}...`);
     const nodes = new Map<string, GraphNode>();
     const edges: GraphEdge[] = [];
@@ -71,7 +118,8 @@ export async function generateDot(rootUri: vscode.Uri, extensions: string[], log
     };
 }
 
-export async function generateGraphFromNode(uri: vscode.Uri, position: vscode.Position, logger: (msg: string) => void): Promise<DotResult> {
+export async function generateGraphFromNode(uri: vscode.Uri, position: vscode.Position, logFn: (msg: string) => void): Promise<DotResult> {
+    logger = logFn;
     const nodes = new Map<string, GraphNode>();
     const edges: GraphEdge[] = [];
     const visited = new Set<string>();
@@ -83,11 +131,29 @@ export async function generateGraphFromNode(uri: vscode.Uri, position: vscode.Po
 
     if (symbols) {
         // Resolve to the containing type if a member is selected
-        const targetSym = findSymForSelection(symbols, position);
+        const targetSymChain = findSymChain(symbols, position);
+        const targetSym = targetSymChain[targetSymChain.length - 1];
+
         if (targetSym && isTypeSymbol(targetSym.kind)) {
-            logger(`Root discovered: ${targetSym.name}`);
-            await crawlRelationships(targetSym, uri, nodes, edges, visited, logger);
-        } else {
+            const rootId = getTypeUniqueId(targetSymChain, uri);
+
+            // 1. Check Graph Cache
+            const cachedDot = graphCache.getGraph(rootId);
+            if (cachedDot) {
+                logger(`Graph Cache Hit: ${rootId}`);
+                return cachedDot;
+            }
+
+            logger(`Root discovered: ${targetSym.name} (ID: ${rootId})`);
+            await crawlRelationships(targetSymChain, uri, nodes, edges, visited, logger);
+
+            const result = {
+                dot: buildDot(nodes, edges),
+                nodeIds: new Set(nodes.keys())
+            };
+            // Cache the result
+            graphCache.setGraph(rootId, result);
+            return result;
             logger(`No type symbol found at ${position.line}:${position.character}`);
         }
     }
@@ -98,16 +164,17 @@ export async function generateGraphFromNode(uri: vscode.Uri, position: vscode.Po
     };
 }
 
-// Find the EXACT symbol at pos
-function findSymAt(syms: vscode.DocumentSymbol[], pos: vscode.Position): vscode.DocumentSymbol | undefined {
+// Find the EXACT symbol chain at pos
+function findSymChain(syms: vscode.DocumentSymbol[], pos: vscode.Position, chain: vscode.DocumentSymbol[] = []): vscode.DocumentSymbol[] {
     for (const s of syms) {
         if (s.range.contains(pos)) {
-            const child = findSymAt(s.children, pos);
-            if (child) return child;
-            return s;
+            const newChain = [...chain, s];
+            const childrenResult = findSymChain(s.children, pos, newChain);
+            if (childrenResult.length > newChain.length) return childrenResult;
+            return newChain;
         }
     }
-    return undefined;
+    return chain;
 }
 
 // Special version for selection: if on field/prop, return parent type
@@ -127,16 +194,50 @@ export function findSymForSelection(syms: vscode.DocumentSymbol[], pos: vscode.P
 }
 
 async function crawlRelationships(
-    symbol: vscode.DocumentSymbol,
+    symbolChain: vscode.DocumentSymbol[],
     uri: vscode.Uri,
     allNodes: Map<string, GraphNode>,
     edges: GraphEdge[],
     visited: Set<string>,
     logger: (msg: string) => void
 ) {
-    const id = getTypeUniqueId(symbol, uri);
+    const symbol = symbolChain[symbolChain.length - 1];
+    const id = getTypeUniqueId(symbolChain, uri);
+
     if (visited.has(id)) return;
     visited.add(id);
+
+    // 2. Check Raw Cache
+    const cachedNode = graphCache.getRaw(id);
+    if (cachedNode) {
+        logger(`Raw Cache Hit: ${id}`);
+        allNodes.set(id, cachedNode);
+
+        // Use cached outgoing edges for full expansion
+        if (cachedNode.outgoingEdges) {
+            // Check if we can satisfy everything from cache
+            const missingTargets = cachedNode.outgoingEdges.filter(e => !graphCache.getRaw(e.to));
+
+            if (missingTargets.length === 0) {
+                // All children are cached! We can skip LSP!
+                for (const edge of cachedNode.outgoingEdges) {
+                    // Ensure unique edges
+                    if (!edges.some(e => e.from === edge.from && e.to === edge.to && e.fromField === edge.fromField)) {
+                        edges.push(edge);
+                    }
+
+                    const targetNode = graphCache.getRaw(edge.to);
+                    if (targetNode) {
+                        allNodes.set(edge.to, targetNode);
+                        await expandFromCache(targetNode, allNodes, edges, visited, logger);
+                    }
+                }
+                return;
+            }
+            logger(`Raw Cache Partial Hit: ${id} (missing dependencies, re-resolving)`);
+        }
+    }
+
 
     const node: GraphNode = {
         id,
@@ -153,6 +254,9 @@ async function crawlRelationships(
     allNodes.set(id, node);
 
     logger(`Analyzing ${symbol.name}...`);
+
+    // Track edges created in this scope to cache them later
+    const localEdges: GraphEdge[] = [];
 
     for (const child of symbol.children) {
         if (child.kind === vscode.SymbolKind.Property || child.kind === vscode.SymbolKind.Field) {
@@ -204,18 +308,23 @@ async function crawlRelationships(
                         );
 
                         if (defSymbols) {
-                            const defSym = findSymAt(defSymbols, targetPos);
+                            const defChain = findSymChain(defSymbols, targetPos);
+                            const defSym = defChain[defChain.length - 1];
+
                             if (defSym && isTypeSymbol(defSym.kind)) {
-                                const targetId = getTypeUniqueId(defSym, targetUri);
+                                const targetId = getTypeUniqueId(defChain, targetUri);
                                 if (!visited.has(targetId)) {
-                                    edges.push({
+                                    const newEdge: GraphEdge = {
                                         from: id,
                                         to: targetId,
                                         fromField: child.name,
                                         type: 'composition',
                                         label: isWrapper ? wrapperName : undefined
-                                    });
-                                    await crawlRelationships(defSym, targetUri, allNodes, edges, visited, logger);
+                                    };
+                                    edges.push(newEdge);
+                                    localEdges.push(newEdge);
+
+                                    await crawlRelationships(defChain, targetUri, allNodes, edges, visited, logger);
                                 }
                             } else {
                                 logger(`    x Resolved to non-type symbol: ${defSym?.name || 'unknown'}`);
@@ -228,14 +337,45 @@ async function crawlRelationships(
                     logger(`    ! Error resolving ${child.name}: ${err.message}`);
                 }
             }
+            // Save to Raw Cache (including resolved edges)
+            node.outgoingEdges = localEdges;
+            graphCache.setRaw(id, node);
         }
     }
 }
 
-async function processSymbols(symbols: vscode.DocumentSymbol[], uri: vscode.Uri, nodes: Map<string, GraphNode>) {
+// Helper to expand purely from cache
+async function expandFromCache(
+    node: GraphNode,
+    allNodes: Map<string, GraphNode>,
+    edges: GraphEdge[],
+    visited: Set<string>,
+    logger: (msg: string) => void
+) {
+    if (!node.outgoingEdges) return;
+
+    for (const edge of node.outgoingEdges) {
+        if (!edges.some(e => e.from === edge.from && e.to === edge.to && e.fromField === edge.fromField)) {
+            edges.push(edge);
+        }
+
+        if (visited.has(edge.to)) continue;
+        visited.add(edge.to);
+
+        const targetNode = graphCache.getRaw(edge.to);
+        if (targetNode) {
+            allNodes.set(edge.to, targetNode);
+            // Recurse
+            await expandFromCache(targetNode, allNodes, edges, visited, logger);
+        }
+    }
+}
+
+async function processSymbols(symbols: vscode.DocumentSymbol[], uri: vscode.Uri, nodes: Map<string, GraphNode>, parentChain: vscode.DocumentSymbol[] = []) {
     for (const sym of symbols) {
+        const chain = [...parentChain, sym];
         if (isTypeSymbol(sym.kind)) {
-            const id = getTypeUniqueId(sym, uri);
+            const id = getTypeUniqueId(chain, uri);
             nodes.set(id, {
                 id,
                 label: sym.name,
@@ -250,7 +390,7 @@ async function processSymbols(symbols: vscode.DocumentSymbol[], uri: vscode.Uri,
             });
         }
         if (sym.children.length > 0) {
-            await processSymbols(sym.children, uri, nodes);
+            await processSymbols(sym.children, uri, nodes, chain);
         }
     }
 }
@@ -340,8 +480,11 @@ function isTypeSymbol(kind: vscode.SymbolKind): boolean {
         kind === vscode.SymbolKind.Enum;
 }
 
-function getTypeUniqueId(symbol: vscode.DocumentSymbol, uri: vscode.Uri): string {
-    return `${uri.fsPath}::${symbol.name}`;
+function getTypeUniqueId(symbolChain: vscode.DocumentSymbol[], uri: vscode.Uri): string {
+    // ID: uri#namespace#type
+    // We construct the chain: Container -> Member -> Type
+    const path = symbolChain.map(s => s.name).join('#');
+    return `${uri.toString()}#${path}`;
 }
 
 function loadExcludePatterns(): string[] {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { generateDot, generateGraphFromNode, DotResult, findSymForSelection } from './graphGenerator';
+import { generateDot, generateGraphFromNode, DotResult, findSymForSelection, graphCache } from './graphGenerator';
 import { getWebviewContent } from './webview';
 
 let activePanel: vscode.WebviewPanel | undefined;
@@ -10,6 +10,15 @@ let debounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "ds-insight" is now active!');
+
+    // Cache Invalidation Listener
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.document.languageId === 'rust') {
+                graphCache.invalidate(e.document.uri);
+            }
+        })
+    );
 
     const showGraph = async () => {
         if (activePanel) {
@@ -21,6 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.ViewColumn.Two,
                 {
                     enableScripts: true,
+                    retainContextWhenHidden: true, // Preserve state when hidden
                     localResourceRoots: [
                         vscode.Uri.joinPath(context.extensionUri, 'media'),
                         vscode.Uri.joinPath(context.extensionUri, 'out')
