@@ -8,7 +8,7 @@ let lastDot = '';
 let debounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Congratulations, your extension "ds-insight" is now active!');
+    console.log('Congratulations, your extension "mornye-insight" is now active!');
 
     // Cache Invalidation Listener
     context.subscriptions.push(
@@ -22,8 +22,8 @@ export function activate(context: vscode.ExtensionContext) {
             activePanel.reveal(vscode.ViewColumn.Two);
         } else {
             activePanel = vscode.window.createWebviewPanel(
-                'dsInsight',
-                'Data Structure Insight',
+                'mornyeInsight',
+                'Mornye Insight',
                 vscode.ViewColumn.Two,
                 {
                     enableScripts: true,
@@ -93,7 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
                         lastDot = result.dot;
                         panel.webview.postMessage({ command: 'update', dot: result.dot });
                         lastDotLength = result.dot.length;
-                        
+
                         graphCache.invalidate(editor.document.uri);
                     } else {
                         break;
@@ -109,7 +109,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    context.subscriptions.push(vscode.commands.registerCommand('ds-insight.showGraph', showGraph));
+    context.subscriptions.push(vscode.commands.registerCommand('mornye-insight.showGraph', showGraph));
 
     context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(e => {
         if (activePanel && e.textEditor === vscode.window.activeTextEditor) {

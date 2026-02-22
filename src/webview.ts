@@ -11,7 +11,7 @@ export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval' ${webview.cspSource}; img-src data: ${webview.cspSource} https:; connect-src ${webview.cspSource} https:; worker-src blob:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Data Structure Insight</title>
+    <title>Mornye Insight</title>
     <script src="${d3Uri}"></script>
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: var(--vscode-editor-background); color: var(--vscode-editor-foreground); font-family: var(--vscode-font-family); }

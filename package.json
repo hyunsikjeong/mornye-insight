@@ -1,6 +1,6 @@
 {
-    "name": "ds-insight",
-    "displayName": "Data Structure Insight",
+    "name": "mornye-insight",
+    "displayName": "Mornye Insight",
     "description": "Visualizes data structure relationships using Graphviz",
     "version": "0.0.1",
     "engines": {
@@ -14,8 +14,8 @@
     "contributes": {
         "commands": [
             {
-                "command": "ds-insight.showGraph",
-                "title": "Data Structure Insight: Show Graph"
+                "command": "mornye-insight.showGraph",
+                "title": "Mornye Insight: Show Graph"
             }
         ]
     },
