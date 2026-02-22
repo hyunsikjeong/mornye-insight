@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-// import * as path from 'path';
-import { generateGraph, DotResult } from './graphGenerator';
+import { generateGraph, graphCache } from './graphGenerator';
 import { getWebviewContent } from './webview';
 
 let activePanel: vscode.WebviewPanel | undefined;
@@ -14,9 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Cache Invalidation Listener
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(e => {
-            if (e.document.languageId === 'rust') {
-                // graphCache.invalidate(e.document.uri);
-            }
+            graphCache.invalidate(e.document.uri);
         })
     );
 
@@ -48,6 +45,9 @@ export function activate(context: vscode.ExtensionContext) {
                         openFile(message.uri, message.line);
                         break;
                     case 'refresh':
+                        if (vscode.window.activeTextEditor) {
+                            graphCache.invalidate(vscode.window.activeTextEditor.document.uri);
+                        }
                         updateGraph();
                         break;
                 }
@@ -73,47 +73,39 @@ export function activate(context: vscode.ExtensionContext) {
         const panel = activePanel;
         const requestId = ++activeRequestId;
 
-        const logger = (msg: string) => {
-            console.log(`[Extension] ${msg}`);
-            panel.webview.postMessage({ command: 'log', text: msg });
-        };
-
         try {
             const editor = vscode.window.activeTextEditor;
-            let result: DotResult | undefined = { dot: '', nodeIds: new Set() };
+            if (!editor) return;
 
-            if (editor) {
-                let attempt = 0;
-                const maxAttempts = 5;
+            let attempt = 0;
+            const maxAttempts = 6;
+            let lastDotLength = -1;
 
-                while (attempt < maxAttempts) {
-                    if (requestId !== activeRequestId) return;
+            while (attempt < maxAttempts) {
+                if (requestId !== activeRequestId) return;
 
-                    result = await generateGraph(editor.document.uri, editor.selection.active);
-                    if (result && result.nodeIds.size > 0) break;
+                const result = await generateGraph(editor.document.uri, editor.selection.active);
 
-                    logger("Waiting for Language Server to warm up...");
-                    if (attempt === 0) {
-                        panel.webview.postMessage({ command: 'status', text: 'Waiting for Language Server...' });
+                if (requestId !== activeRequestId) return;
+
+                if (result && result.dot) {
+                    if (result.dot.length > lastDotLength) {
+                        lastDot = result.dot;
+                        panel.webview.postMessage({ command: 'update', dot: result.dot });
+                        lastDotLength = result.dot.length;
+                        
+                        graphCache.invalidate(editor.document.uri);
+                    } else {
+                        break;
                     }
-
-                    await new Promise(r => setTimeout(r, 1500));
-                    attempt++;
                 }
 
-                if (result && result.nodeIds.size === 0 && requestId === activeRequestId) {
-                    // No data found — silently keep showing last graph.
-                    return;
-                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                attempt++;
             }
-            if (result)
-                logger(`Crawl done: ${result.nodeIds.size} nodes, dot length: ${result.dot.length}, requestId ok: ${requestId === activeRequestId}`);
-            if (result && result.dot && requestId === activeRequestId) {
-                lastDot = result.dot;
-                panel.webview.postMessage({ command: 'update', dot: result.dot });
-            }
+
         } catch (error: any) {
-            logger(`Error: ${error.message}`);
+            panel.webview.postMessage({ command: 'log', text: `Error: ${error.message}` });
         }
     };
 

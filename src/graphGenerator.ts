@@ -22,6 +22,84 @@ export interface DotResult {
     nodeIds: Set<string>;
 }
 
+class GraphCacheManager {
+    private rawCache = new Map<string, GraphNode>();
+    private graphCache = new Map<string, DotResult>();
+    private dependencies = new Map<string, Set<string>>();
+
+    getRaw(id: string): GraphNode | undefined {
+        return this.rawCache.get(id);
+    }
+
+    setRaw(id: string, node: GraphNode) {
+        this.rawCache.set(id, node);
+    }
+
+    getGraph(rootId: string): DotResult | undefined {
+        return this.graphCache.get(rootId);
+    }
+
+    setGraph(rootId: string, result: DotResult, dependentUris: Set<string>) {
+        this.graphCache.set(rootId, result);
+        for (const uri of dependentUris) {
+            if (!this.dependencies.has(uri)) {
+                this.dependencies.set(uri, new Set());
+            }
+            this.dependencies.get(uri)!.add(rootId);
+        }
+    }
+
+    invalidate(uri: vscode.Uri) {
+        const uriStr = uri.toString();
+        
+        for (const [id, node] of this.rawCache) {
+            if (node.uri.toString() === uriStr) {
+                this.rawCache.delete(id);
+            }
+        }
+        
+        const affectedRoots = this.dependencies.get(uriStr);
+        if (affectedRoots) {
+            for (const rootId of affectedRoots) {
+                this.graphCache.delete(rootId);
+            }
+            this.dependencies.delete(uriStr);
+        }
+    }
+}
+
+export const graphCache = new GraphCacheManager();
+
+function resolveFromCache(id: string, localGraph: Map<string, GraphNode>): boolean {
+    const added = new Set<string>();
+
+    function resolve(currentId: string): boolean {
+        if (localGraph.has(currentId)) return true;
+        
+        const cached = graphCache.getRaw(currentId);
+        if (!cached) return false;
+        
+        localGraph.set(currentId, cached);
+        added.add(currentId);
+        
+        for (const edge of cached.edges) {
+            if (!resolve(edge.to)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (resolve(id)) {
+        return true;
+    } else {
+        for (const addedId of added) {
+            localGraph.delete(addedId);
+        }
+        return false;
+    }
+}
+
 function escapeHtml(str: string): string {
     return str.replace(/[&<>"']/g, function (m) {
         switch (m) {
@@ -85,18 +163,35 @@ async function getFirstTypeSymbolOnPos(uri: vscode.Uri, pos: vscode.Position): P
 }
 
 export async function generateGraph(uri: vscode.Uri, pos: vscode.Position): Promise<DotResult | undefined> {
-    const graph = new Map<string, GraphNode>;
-    const ret = await generateNodeFromPos(uri, pos, graph);
+    if (!(await isValidSourceFile(uri))) return;
+    
+    const symbol = await getFirstTypeSymbolOnPos(uri, pos);
+    if (!symbol) return;
+    
+    const rootId = `${uri.toString()}#${symbol.name}`;
+    
+    const cachedGraph = graphCache.getGraph(rootId);
+    if (cachedGraph) return cachedGraph;
 
-    if (!ret)
-        return;
+    const graph = new Map<string, GraphNode>();
+    
+    const ret = await generateNodeFromSymbol(uri, symbol, graph);
+
+    if (!ret) return;
 
     const dot = buildDot(graph);
-
-    return {
+    const result = {
         dot,
         nodeIds: new Set(graph.keys())
+    };
+
+    const dependentUris = new Set<string>();
+    for (const node of graph.values()) {
+        dependentUris.add(node.uri.toString());
     }
+
+    graphCache.setGraph(rootId, result, dependentUris);
+    return result;
 }
 
 async function generateNodeFromPos(uri: vscode.Uri, pos: vscode.Position, graph: Map<string, GraphNode>): Promise<GraphNode | undefined> {
@@ -107,8 +202,15 @@ async function generateNodeFromPos(uri: vscode.Uri, pos: vscode.Position, graph:
     if (!symbol)
         return;
 
+    return await generateNodeFromSymbol(uri, symbol, graph);
+}
+
+async function generateNodeFromSymbol(uri: vscode.Uri, symbol: vscode.DocumentSymbol, graph: Map<string, GraphNode>): Promise<GraphNode | undefined> {
     const name = `${uri.toString()}#${symbol.name}`;
     if (graph.has(name))
+        return graph.get(name);
+
+    if (resolveFromCache(name, graph))
         return graph.get(name);
 
     // Currently this logic only supports Rust
@@ -198,6 +300,7 @@ async function generateStructNode(uri: vscode.Uri, symbol: vscode.DocumentSymbol
         edges: []
     };
     graph.set(node.id, node);
+    graphCache.setRaw(node.id, node);
 
     for (const child of symbol.children) {
         if (child.kind !== vscode.SymbolKind.Field)
@@ -232,6 +335,7 @@ async function generateEnumNode(uri: vscode.Uri, symbol: vscode.DocumentSymbol, 
         edges: []
     };
     graph.set(node.id, node);
+    graphCache.setRaw(node.id, node);
 
     for (const child of symbol.children) {
         if (child.kind !== vscode.SymbolKind.EnumMember)
@@ -266,6 +370,7 @@ async function generateTypeAliasNode(uri: vscode.Uri, symbol: vscode.DocumentSym
         edges: []
     }
     graph.set(node.id, node);
+    graphCache.setRaw(node.id, node);
 
     const childNodes = await generateNodesFromTypeDetail(uri, node.id, symbol.selectionRange.end, symbol.range.end, graph);
 
