@@ -48,5 +48,9 @@
         "d3-graphviz": "^5.4.0",
         "d3-selection": "^3.0.0",
         "minimatch": "^10.2.1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/hyunsikjeong/mornye-insight"
     }
 }
