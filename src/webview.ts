@@ -1,9 +1,13 @@
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
 export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-    const d3Uri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'd3.min.js'));
-    const hpccWasmUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'hpcc-wasm.js'));
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'out', 'webviewMain.js'));
+    const d3Uri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "d3.min.js"));
+    const hpccWasmUri = webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "media", "hpcc-wasm.js"),
+    );
+    const scriptUri = webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "out", "webviewMain.js"),
+    );
 
     return `<!DOCTYPE html>
 <html lang="en">

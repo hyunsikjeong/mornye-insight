@@ -1,10 +1,10 @@
-import * as vscode from 'vscode';
-import { generateGraph, graphCache } from './graphGenerator';
-import { getWebviewContent } from './webview';
+import * as vscode from "vscode";
+import { generateGraph, graphCache } from "./graphGenerator";
+import { getWebviewContent } from "./webview";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let activeRequestId = 0;
-let lastDot = '';
+let lastDot = "";
 let debounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
@@ -12,9 +12,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Cache Invalidation Listener
     context.subscriptions.push(
-        vscode.workspace.onDidChangeTextDocument(e => {
+        vscode.workspace.onDidChangeTextDocument((e) => {
             graphCache.invalidate(e.document.uri);
-        })
+        }),
     );
 
     const showGraph = async () => {
@@ -22,42 +22,54 @@ export function activate(context: vscode.ExtensionContext) {
             activePanel.reveal(vscode.ViewColumn.Two);
         } else {
             activePanel = vscode.window.createWebviewPanel(
-                'mornyeInsight',
-                'Mornye Insight',
+                "mornyeInsight",
+                "Mornye Insight",
                 vscode.ViewColumn.Two,
                 {
                     enableScripts: true,
                     retainContextWhenHidden: true, // Preserve state when hidden
                     localResourceRoots: [
-                        vscode.Uri.joinPath(context.extensionUri, 'media'),
-                        vscode.Uri.joinPath(context.extensionUri, 'out')
-                    ]
-                }
+                        vscode.Uri.joinPath(context.extensionUri, "media"),
+                        vscode.Uri.joinPath(context.extensionUri, "out"),
+                    ],
+                },
             );
 
-            activePanel.onDidDispose(() => {
-                activePanel = undefined;
-            }, null, context.subscriptions);
+            activePanel.onDidDispose(
+                () => {
+                    activePanel = undefined;
+                },
+                null,
+                context.subscriptions,
+            );
 
-            activePanel.webview.onDidReceiveMessage(message => {
-                switch (message.command) {
-                    case 'openFile':
-                        openFile(message.uri, message.line);
-                        break;
-                    case 'refresh':
-                        if (vscode.window.activeTextEditor) {
-                            graphCache.invalidate(vscode.window.activeTextEditor.document.uri);
-                        }
-                        updateGraph();
-                        break;
-                }
-            }, undefined, context.subscriptions);
+            activePanel.webview.onDidReceiveMessage(
+                (message) => {
+                    switch (message.command) {
+                        case "openFile":
+                            openFile(message.uri, message.line);
+                            break;
+                        case "refresh":
+                            if (vscode.window.activeTextEditor) {
+                                graphCache.invalidate(vscode.window.activeTextEditor.document.uri);
+                            }
+                            updateGraph();
+                            break;
+                    }
+                },
+                undefined,
+                context.subscriptions,
+            );
 
-            activePanel.onDidChangeViewState(e => {
-                if (e.webviewPanel.visible && lastDot) {
-                    activePanel?.webview.postMessage({ command: 'update', dot: lastDot });
-                }
-            }, null, context.subscriptions);
+            activePanel.onDidChangeViewState(
+                (e) => {
+                    if (e.webviewPanel.visible && lastDot) {
+                        activePanel?.webview.postMessage({ command: "update", dot: lastDot });
+                    }
+                },
+                null,
+                context.subscriptions,
+            );
         }
 
         activePanel.webview.html = getWebviewContent(activePanel.webview, context.extensionUri);
@@ -91,7 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (result && result.dot) {
                     if (result.dot.length > lastDotLength) {
                         lastDot = result.dot;
-                        panel.webview.postMessage({ command: 'update', dot: result.dot });
+                        panel.webview.postMessage({ command: "update", dot: result.dot });
                         lastDotLength = result.dot.length;
 
                         graphCache.invalidate(editor.document.uri);
@@ -100,33 +112,35 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise((resolve) => setTimeout(resolve, 1000));
                 attempt++;
             }
-
         } catch (error: any) {
-            panel.webview.postMessage({ command: 'log', text: `Error: ${error.message}` });
+            panel.webview.postMessage({ command: "log", text: `Error: ${error.message}` });
         }
     };
 
-    context.subscriptions.push(vscode.commands.registerCommand('mornye-insight.showGraph', showGraph));
+    context.subscriptions.push(
+        vscode.commands.registerCommand("mornye-insight.showGraph", showGraph),
+    );
 
-    context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(e => {
-        if (activePanel && e.textEditor === vscode.window.activeTextEditor) {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                updateGraph();
-            }, 700);
-
-        }
-    }));
+    context.subscriptions.push(
+        vscode.window.onDidChangeTextEditorSelection((e) => {
+            if (activePanel && e.textEditor === vscode.window.activeTextEditor) {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    updateGraph();
+                }, 700);
+            }
+        }),
+    );
 }
 
 function openFile(uriStr: string, line: number) {
     const uri = vscode.Uri.parse(uriStr);
-    vscode.workspace.openTextDocument(uri).then(doc => {
+    vscode.workspace.openTextDocument(uri).then((doc) => {
         vscode.window.showTextDocument(doc, { selection: new vscode.Range(line, 0, line, 0) });
     });
 }
 
-export function deactivate() { }
+export function deactivate() {}
