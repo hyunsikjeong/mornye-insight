@@ -51,6 +51,22 @@ class GraphCacheManager {
             this.dependencies.delete(uriStr);
         }
     }
+
+    invalidateForRetry(uri: vscode.Uri) {
+        const prefix = uri.toString() + "#";
+
+        for (const id of this.rawCache.keys()) {
+            if (id.startsWith(prefix)) {
+                this.rawCache.delete(id);
+            }
+        }
+
+        for (const rootId of this.graphCache.keys()) {
+            if (rootId.startsWith(prefix)) {
+                this.graphCache.delete(rootId);
+            }
+        }
+    }
 }
 
 export const graphCache = new GraphCacheManager();

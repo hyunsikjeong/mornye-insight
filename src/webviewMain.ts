@@ -71,6 +71,7 @@ let gviz: GvInstance | null = null;
 let pendingDot: string | null = null;
 let zoomBehavior: D3Zoom | null = null;
 let lastRenderedDot: string | null = null;
+const svgCache = new Map<string, string>();
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -103,10 +104,15 @@ function renderGraph(dot: string): void {
     if (!container) return;
 
     try {
-        log(`Rendering (${dot.length} chars)…`);
-        const svgText = gviz.layout(dot, "svg", "dot");
+        let svgText = svgCache.get(dot);
+        if (svgText) {
+            log(`Cache hit (${dot.length} chars), skipping layout`);
+        } else {
+            log(`Rendering (${dot.length} chars)…`);
+            svgText = gviz.layout(dot, "svg", "dot");
+            svgCache.set(dot, svgText);
+        }
 
-        // Inject the Graphviz SVG completely as-is.
         container.innerHTML = svgText;
 
         const svgEl = container.querySelector("svg") as SVGSVGElement | null;

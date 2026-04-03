@@ -19,6 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Cache Invalidation Listener
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument((e) => {
+            if (e.contentChanges.length === 0) return;
             graphCache.invalidate(e.document.uri);
         }),
     );
@@ -112,7 +113,7 @@ export function activate(context: vscode.ExtensionContext) {
                         panel.webview.postMessage({ command: "update", dot: result.dot });
                         lastDotLength = result.dot.length;
 
-                        graphCache.invalidate(editor.document.uri);
+                        graphCache.invalidateForRetry(editor.document.uri);
                     } else {
                         break;
                     }
