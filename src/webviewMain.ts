@@ -10,6 +10,7 @@ import type { WebviewApi } from "vscode-webview";
 type ExtensionMessage =
     | { command: "update"; dot: string }
     | { command: "status"; text: string }
+    | { command: "hideLoading" }
     | { command: "log"; text: string }
     | { command: "focusNode"; nodeId: string };
 
@@ -280,10 +281,14 @@ window.addEventListener("message", (ev: MessageEvent) => {
             break;
         case "status": {
             const el = document.getElementById("loading")!;
-            el.style.display = "block";
-            el.textContent = msg.text;
+            el.style.display = "flex";
+            const textEl = document.getElementById("loading-text");
+            if (textEl) textEl.textContent = msg.text;
             break;
         }
+        case "hideLoading":
+            document.getElementById("loading")!.style.display = "none";
+            break;
         case "log":
             log(msg.text);
             break;

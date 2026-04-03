@@ -100,6 +100,8 @@ export function activate(context: vscode.ExtensionContext) {
             const maxAttempts = 6;
             let lastDotLength = -1;
 
+            panel.webview.postMessage({ command: "status", text: "Generating graph..." });
+
             while (attempt < maxAttempts) {
                 if (requestId !== activeRequestId) return;
 
@@ -114,6 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
                         lastDotLength = result.dot.length;
 
                         graphCache.invalidateForRetry(editor.document.uri);
+                        panel.webview.postMessage({ command: "status", text: "Resolving types..." });
                     } else {
                         break;
                     }
@@ -122,7 +125,10 @@ export function activate(context: vscode.ExtensionContext) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));
                 attempt++;
             }
+
+            panel.webview.postMessage({ command: "hideLoading" });
         } catch (error: any) {
+            panel.webview.postMessage({ command: "hideLoading" });
             panel.webview.postMessage({ command: "log", text: `Error: ${error.message}` });
         }
     };

@@ -22,9 +22,18 @@ export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.
         #graph { width: 100vw; height: 100vh; }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 24px; color: var(--vscode-descriptionForeground);
+            font-size: 16px; color: var(--vscode-descriptionForeground);
             z-index: 100; pointer-events: none;
             font-family: var(--vscode-font-family);
+            display: flex; flex-direction: column; align-items: center; gap: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            width: 28px; height: 28px;
+            border: 3px solid var(--vscode-descriptionForeground);
+            border-top-color: var(--vscode-button-background);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
         }
         #logs {
             position: absolute; bottom: 0; left: 0; right: 0; height: 120px;
@@ -45,7 +54,7 @@ export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.
     </style>
 </head>
 <body data-hpcc-uri="${hpccWasmUri}">
-    <div id="loading">Loading...</div>
+    <div id="loading"><div class="spinner"></div><span id="loading-text">Loading...</span></div>
     <div id="logs">Waiting for logs...</div>
     <button id="refreshBtn">Refresh</button>
     <div id="graph"></div>
