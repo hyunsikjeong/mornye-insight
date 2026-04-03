@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
-import { generateGraph, graphCache } from "./graphGenerator";
+import { generateGraph, graphCache, setHandlerRegistry } from "./graphGenerator";
+import { HandlerRegistry } from "./languageHandler";
+import { GenericHandler } from "./handlers/genericHandler";
 import { getWebviewContent } from "./webview";
 
 let activePanel: vscode.WebviewPanel | undefined;
@@ -9,6 +11,10 @@ let debounceTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mornye-insight" is now active!');
+
+    const registry = new HandlerRegistry(new GenericHandler());
+    setHandlerRegistry(registry);
+    context.subscriptions.push({ dispose: () => registry.dispose() });
 
     // Cache Invalidation Listener
     context.subscriptions.push(

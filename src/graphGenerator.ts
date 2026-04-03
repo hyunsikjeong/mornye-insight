@@ -1,26 +1,6 @@
 import * as vscode from "vscode";
-
-interface GraphNode {
-    // Unique ID: {uri}#{name}
-    id: string;
-    // VS Code dependent members
-    uri: vscode.Uri;
-    symbol: vscode.DocumentSymbol;
-    // Fields. Name: Def
-    fields: [string, string][];
-    edges: GraphEdge[];
-}
-
-interface GraphEdge {
-    to: string;
-    fromField?: string;
-    type: "inheritance" | "composition" | "implementation";
-}
-
-export interface DotResult {
-    dot: string;
-    nodeIds: Set<string>;
-}
+import { GraphNode, DotResult, TypeReference } from "./types";
+import { LanguageHandler, HandlerRegistry } from "./languageHandler";
 
 class GraphCacheManager {
     private rawCache = new Map<string, Promise<GraphNode | undefined>>();
@@ -75,6 +55,12 @@ class GraphCacheManager {
 
 export const graphCache = new GraphCacheManager();
 
+let handlerRegistry: HandlerRegistry | undefined;
+
+export function setHandlerRegistry(registry: HandlerRegistry) {
+    handlerRegistry = registry;
+}
+
 async function resolveFromCache(id: string, localGraph: Map<string, GraphNode>): Promise<boolean> {
     const added = new Set<string>();
 
@@ -127,23 +113,17 @@ function escapeHtml(str: string): string {
     });
 }
 
-function isTypeSymbol(symbol: vscode.DocumentSymbol): boolean {
-    const kind = symbol.kind;
-    return (
-        kind === vscode.SymbolKind.Class ||
-        kind === vscode.SymbolKind.Interface ||
-        kind === vscode.SymbolKind.Struct ||
-        kind === vscode.SymbolKind.Enum ||
-        kind === vscode.SymbolKind.TypeParameter ||
-        kind === vscode.SymbolKind.Variable ||
-        kind === vscode.SymbolKind.Constant || // Sometimes Aliases are Constants
-        kind === vscode.SymbolKind.Operator
-    ); // TypeAlias often maps to Operator (24) in VSCode/Rust-Analyzer
+function getHandler(languageId: string): LanguageHandler {
+    if (!handlerRegistry) {
+        throw new Error("HandlerRegistry not initialized");
+    }
+    return handlerRegistry.getHandler(languageId);
 }
 
 async function getFirstTypeSymbolOnPos(
     uri: vscode.Uri,
     pos: vscode.Position,
+    handler: LanguageHandler,
 ): Promise<vscode.DocumentSymbol | undefined> {
     let symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
         "vscode.executeDocumentSymbolProvider",
@@ -159,7 +139,7 @@ async function getFirstTypeSymbolOnPos(
 
         for (const s of symbols) {
             if (s.range.contains(pos)) {
-                if (isTypeSymbol(s)) {
+                if (handler.isTypeSymbol(s)) {
                     return s;
                 }
 
@@ -187,7 +167,10 @@ export async function generateGraph(
 ): Promise<DotResult | undefined> {
     if (!(await isValidSourceFile(uri))) return;
 
-    const symbol = await getFirstTypeSymbolOnPos(uri, pos);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const handler = getHandler(document.languageId);
+
+    const symbol = await getFirstTypeSymbolOnPos(uri, pos, handler);
     if (!symbol) return;
 
     const rootId = `${uri.toString()}#${symbol.name}`;
@@ -197,7 +180,7 @@ export async function generateGraph(
 
     const graph = new Map<string, GraphNode>();
 
-    const ret = await generateNodeFromSymbol(uri, symbol, graph);
+    const ret = await generateNodeFromSymbol(uri, symbol, graph, handler);
 
     if (!ret) return;
 
@@ -220,24 +203,29 @@ async function generateNodeFromPos(
     uri: vscode.Uri,
     pos: vscode.Position,
     graph: Map<string, GraphNode>,
+    handler: LanguageHandler,
 ): Promise<GraphNode | undefined> {
     if (!(await isValidSourceFile(uri))) return;
 
-    const symbol = await getFirstTypeSymbolOnPos(uri, pos);
+    const symbol = await getFirstTypeSymbolOnPos(uri, pos, handler);
     if (!symbol) return;
 
-    return await generateNodeFromSymbol(uri, symbol, graph);
+    return await generateNodeFromSymbol(uri, symbol, graph, handler);
 }
 
 async function generateNodeFromSymbol(
     uri: vscode.Uri,
     symbol: vscode.DocumentSymbol,
     graph: Map<string, GraphNode>,
+    handler: LanguageHandler,
 ): Promise<GraphNode | undefined> {
-    const name = `${uri.toString()}#${symbol.name}`;
-    if (graph.has(name)) return graph.get(name);
+    const id = `${uri.toString()}#${symbol.name}`;
+    if (graph.has(id)) return graph.get(id);
 
-    if (await resolveFromCache(name, graph)) return graph.get(name);
+    if (await resolveFromCache(id, graph)) return graph.get(id);
+
+    const category = handler.getTypeCategory(symbol);
+    if (!category) return undefined;
 
     let resolveRaw!: (node: GraphNode | undefined) => void;
     let rejectRaw!: (error: unknown) => void;
@@ -245,31 +233,82 @@ async function generateNodeFromSymbol(
         resolveRaw = resolve;
         rejectRaw = reject;
     });
-    graphCache.setRaw(name, promise);
+    graphCache.setRaw(id, promise);
 
     let result: GraphNode | undefined;
     try {
-        // Currently this logic only supports Rust
-        // TODO: 1. test on other languages, 2. test on SymbolKind.Class and so on
-        switch (symbol.kind) {
-            case vscode.SymbolKind.Struct:
-                result = await generateStructNode(uri, symbol, graph);
-                break;
-            case vscode.SymbolKind.Enum:
-                result = await generateEnumNode(uri, symbol, graph);
-                break;
-            case vscode.SymbolKind.TypeParameter: // type A = B in Rust. Why???
-                result = await generateTypeAliasNode(uri, symbol, graph);
-                break;
+        const document = await vscode.workspace.openTextDocument(uri);
+        const node: GraphNode = { id, uri, symbol, fields: [], edges: [] };
+        graph.set(id, node);
+
+        if (category === "typeAlias") {
+            node.fields.push(["def", symbol.detail ?? ""]);
+            const refs = await handler.extractTypeReferences(
+                document,
+                new vscode.Range(symbol.selectionRange.end, symbol.range.end),
+            );
+            for (const ref of refs) {
+                await resolveTypeReference(uri, ref, node, "def", graph, handler);
+            }
+        } else {
+            const fields = await handler.extractFields(document, symbol);
+            for (const field of fields) {
+                node.fields.push([field.name, field.typeText]);
+                const refs = await handler.extractTypeReferences(document, field.typeRange);
+                for (const ref of refs) {
+                    await resolveTypeReference(uri, ref, node, field.name, graph, handler);
+                }
+            }
         }
+
+        result = node;
     } catch (e) {
-        graphCache.deleteRaw(name);
+        graphCache.deleteRaw(id);
         rejectRaw(e);
         throw e;
     }
 
     resolveRaw(result);
     return result;
+}
+
+async function resolveTypeReference(
+    uri: vscode.Uri,
+    ref: TypeReference,
+    parentNode: GraphNode,
+    fromField: string,
+    graph: Map<string, GraphNode>,
+    handler: LanguageHandler,
+): Promise<void> {
+    const midPos = new vscode.Position(
+        ref.range.start.line,
+        Math.floor((ref.range.start.character + ref.range.end.character) / 2),
+    );
+    const defs = await vscode.commands.executeCommand<
+        (vscode.Location | vscode.LocationLink)[]
+    >("vscode.executeDefinitionProvider", uri, midPos);
+
+    if (!defs || defs.length === 0) return;
+
+    const def = defs[0];
+    const targetUri = "targetUri" in def ? def.targetUri : def.uri;
+    const targetRange = "targetRange" in def ? def.targetRange : def.range;
+
+    const targetNode = await generateNodeFromPos(
+        targetUri,
+        targetRange.start,
+        graph,
+        handler,
+    );
+    if (targetNode && targetNode.id !== parentNode.id) {
+        if (!parentNode.edges.some((e) => e.to === targetNode.id && e.fromField === fromField)) {
+            parentNode.edges.push({
+                to: targetNode.id,
+                fromField,
+                type: "composition",
+            });
+        }
+    }
 }
 
 async function isValidSourceFile(uri: vscode.Uri): Promise<boolean> {
@@ -286,186 +325,6 @@ async function isValidSourceFile(uri: vscode.Uri): Promise<boolean> {
     );
 
     return found.length > 0;
-}
-
-async function getTypeDetailString(
-    uri: vscode.Uri,
-    selectionEnd: vscode.Position,
-    rangeEnd: vscode.Position,
-): Promise<string> {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const targetRange = new vscode.Range(selectionEnd, rangeEnd);
-    const rawText = document.getText(targetRange);
-
-    return rawText.trim();
-}
-
-async function generateNodesFromTypeDetail(
-    uri: vscode.Uri,
-    parentId: string,
-    selectionEnd: vscode.Position,
-    rangeEnd: vscode.Position,
-    graph: Map<string, GraphNode>,
-): Promise<GraphNode[]> {
-    const document = await vscode.workspace.openTextDocument(uri);
-
-    let pos = document.positionAt(document.offsetAt(selectionEnd) + 1);
-    const nodeIds = new Set<string>();
-    const ret = [];
-
-    while (pos.isBeforeOrEqual(rangeEnd)) {
-        const defs = await vscode.commands.executeCommand<
-            (vscode.Location | vscode.LocationLink)[]
-        >("vscode.executeDefinitionProvider", uri, pos);
-
-        if (defs && defs.length > 0) {
-            // There must be only one defintion.
-            const def = defs[0];
-            const targetUri = "targetUri" in def ? def.targetUri : def.uri;
-            const targetRange = "targetRange" in def ? def.targetRange : def.range;
-
-            const node = await generateNodeFromPos(targetUri, targetRange.start, graph);
-            if (node && node.id !== parentId && !nodeIds.has(node.id)) {
-                nodeIds.add(node.id);
-                ret.push(node);
-            }
-
-            if ("originSelectionRange" in def && def.originSelectionRange) {
-                pos = document.positionAt(document.offsetAt(def.originSelectionRange.end) + 1);
-                continue;
-            }
-        }
-        pos = document.positionAt(document.offsetAt(pos) + 1);
-    }
-
-    return ret;
-}
-
-async function generateStructNode(
-    uri: vscode.Uri,
-    symbol: vscode.DocumentSymbol,
-    graph: Map<string, GraphNode>,
-): Promise<GraphNode | undefined> {
-    if (symbol.children.length === 0) {
-        // TODO: Support tuple struct
-        console.log(`Struct symbol ${symbol.name} does not have children; maybe tuple struct?`);
-    }
-
-    const node: GraphNode = {
-        id: `${uri.toString()}#${symbol.name}`,
-        uri,
-        symbol,
-        fields: [],
-        edges: [],
-    };
-    graph.set(node.id, node);
-
-    for (const child of symbol.children) {
-        if (child.kind !== vscode.SymbolKind.Field) continue;
-
-        node.fields.push([child.name, child.detail]);
-        const childNodes = await generateNodesFromTypeDetail(
-            uri,
-            node.id,
-            child.selectionRange.end,
-            child.range.end,
-            graph,
-        );
-
-        for (const childNode of childNodes) {
-            const edge: GraphEdge = {
-                to: childNode.id,
-                fromField: child.name,
-                type: "composition",
-            };
-            node.edges.push(edge);
-        }
-    }
-
-    return node;
-}
-
-async function generateEnumNode(
-    uri: vscode.Uri,
-    symbol: vscode.DocumentSymbol,
-    graph: Map<string, GraphNode>,
-): Promise<GraphNode | undefined> {
-    if (symbol.children.length === 0) {
-        console.log(`Enum symbol ${symbol.name} does not have children; wtf?`);
-    }
-
-    const node: GraphNode = {
-        id: `${uri.toString()}#${symbol.name}`,
-        uri,
-        symbol,
-        fields: [],
-        edges: [],
-    };
-    graph.set(node.id, node);
-
-    for (const child of symbol.children) {
-        if (child.kind !== vscode.SymbolKind.EnumMember) continue;
-
-        if (!child.detail)
-            node.fields.push([
-                child.name,
-                await getTypeDetailString(uri, child.selectionRange.end, child.range.end),
-            ]);
-        else node.fields.push([child.name, `(${child.detail})`]);
-
-        const childNodes = await generateNodesFromTypeDetail(
-            uri,
-            node.id,
-            child.selectionRange.end,
-            child.range.end,
-            graph,
-        );
-
-        for (const childNode of childNodes) {
-            const edge: GraphEdge = {
-                to: childNode.id,
-                fromField: child.name,
-                type: "composition",
-            };
-            node.edges.push(edge);
-        }
-    }
-
-    return node;
-}
-
-async function generateTypeAliasNode(
-    uri: vscode.Uri,
-    symbol: vscode.DocumentSymbol,
-    graph: Map<string, GraphNode>,
-): Promise<GraphNode | undefined> {
-    const node: GraphNode = {
-        id: `${uri.toString()}#${symbol.name}`,
-        uri,
-        symbol,
-        fields: [["def", symbol.detail]],
-        edges: [],
-    };
-    graph.set(node.id, node);
-
-    const childNodes = await generateNodesFromTypeDetail(
-        uri,
-        node.id,
-        symbol.selectionRange.end,
-        symbol.range.end,
-        graph,
-    );
-
-    for (const childNode of childNodes) {
-        const edge: GraphEdge = {
-            to: childNode.id,
-            fromField: "def",
-            type: "composition",
-        };
-        node.edges.push(edge);
-    }
-
-    return node;
 }
 
 function buildDot(nodes: Map<string, GraphNode>): string {
@@ -489,7 +348,8 @@ function buildDot(nodes: Map<string, GraphNode>): string {
                     const displayStr =
                         node.symbol.kind === vscode.SymbolKind.Enum
                             ? `${fieldName}${fieldDef}`
-                            : node.symbol.kind === vscode.SymbolKind.TypeParameter
+                            : node.symbol.kind === vscode.SymbolKind.TypeParameter ||
+                                node.symbol.kind === vscode.SymbolKind.Operator
                               ? `${fieldDef}`
                               : `${fieldName}: ${fieldDef}`;
 
@@ -511,7 +371,10 @@ function buildDot(nodes: Map<string, GraphNode>): string {
             borderColor = "#d4a017";
             headerColor = "#8a6d0b";
             titleHtml = `<I>&lt;&lt;enum&gt;&gt;</I><BR/><B>${escapedTitle}</B>`;
-        } else if (node.symbol.kind === vscode.SymbolKind.TypeParameter) {
+        } else if (
+            node.symbol.kind === vscode.SymbolKind.TypeParameter ||
+            node.symbol.kind === vscode.SymbolKind.Operator
+        ) {
             shape = "component";
             borderColor = "#d4a017";
             headerColor = "#5c5c5c";
