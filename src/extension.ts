@@ -9,6 +9,7 @@ let activeRequestId = 0;
 let lastDot = "";
 let debounceTimer: NodeJS.Timeout | undefined;
 let pinned = false;
+let suppressUntil = 0;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mornye-insight" is now active!');
@@ -144,7 +145,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.window.onDidChangeTextEditorSelection((e) => {
-            if (activePanel && !pinned && e.textEditor === vscode.window.activeTextEditor) {
+            if (activePanel && !pinned && Date.now() >= suppressUntil && e.textEditor === vscode.window.activeTextEditor) {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
                     updateGraph();
@@ -155,6 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function openFile(uriStr: string, line: number) {
+    suppressUntil = Date.now() + 500;
     const uri = vscode.Uri.parse(uriStr);
     vscode.workspace.openTextDocument(uri).then((doc) => {
         vscode.window.showTextDocument(doc, { selection: new vscode.Range(line, 0, line, 0) });
