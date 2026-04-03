@@ -23,16 +23,20 @@ export interface DotResult {
 }
 
 class GraphCacheManager {
-    private rawCache = new Map<string, GraphNode>();
+    private rawCache = new Map<string, Promise<GraphNode | undefined>>();
     private graphCache = new Map<string, DotResult>();
     private dependencies = new Map<string, Set<string>>();
 
-    getRaw(id: string): GraphNode | undefined {
+    getRaw(id: string): Promise<GraphNode | undefined> | undefined {
         return this.rawCache.get(id);
     }
 
-    setRaw(id: string, node: GraphNode) {
-        this.rawCache.set(id, node);
+    setRaw(id: string, promise: Promise<GraphNode | undefined>) {
+        this.rawCache.set(id, promise);
+    }
+
+    deleteRaw(id: string) {
+        this.rawCache.delete(id);
     }
 
     getGraph(rootId: string): DotResult | undefined {
@@ -51,9 +55,10 @@ class GraphCacheManager {
 
     invalidate(uri: vscode.Uri) {
         const uriStr = uri.toString();
+        const prefix = uriStr + "#";
 
-        for (const [id, node] of this.rawCache) {
-            if (node.uri.toString() === uriStr) {
+        for (const id of this.rawCache.keys()) {
+            if (id.startsWith(prefix)) {
                 this.rawCache.delete(id);
             }
         }
@@ -70,27 +75,30 @@ class GraphCacheManager {
 
 export const graphCache = new GraphCacheManager();
 
-function resolveFromCache(id: string, localGraph: Map<string, GraphNode>): boolean {
+async function resolveFromCache(id: string, localGraph: Map<string, GraphNode>): Promise<boolean> {
     const added = new Set<string>();
 
-    function resolve(currentId: string): boolean {
+    async function resolve(currentId: string): Promise<boolean> {
         if (localGraph.has(currentId)) return true;
 
         const cached = graphCache.getRaw(currentId);
         if (!cached) return false;
 
-        localGraph.set(currentId, cached);
+        const node = await cached;
+        if (!node) return false;
+
+        localGraph.set(currentId, node);
         added.add(currentId);
 
-        for (const edge of cached.edges) {
-            if (!resolve(edge.to)) {
+        for (const edge of node.edges) {
+            if (!(await resolve(edge.to))) {
                 return false;
             }
         }
         return true;
     }
 
-    if (resolve(id)) {
+    if (await resolve(id)) {
         return true;
     } else {
         for (const addedId of added) {
@@ -229,20 +237,39 @@ async function generateNodeFromSymbol(
     const name = `${uri.toString()}#${symbol.name}`;
     if (graph.has(name)) return graph.get(name);
 
-    if (resolveFromCache(name, graph)) return graph.get(name);
+    if (await resolveFromCache(name, graph)) return graph.get(name);
 
-    // Currently this logic only supports Rust
-    // TODO: 1. test on other languages, 2. test on SymbolKind.Class and so on
-    switch (symbol.kind) {
-        case vscode.SymbolKind.Struct:
-            return await generateStructNode(uri, symbol, graph);
-        case vscode.SymbolKind.Enum:
-            return await generateEnumNode(uri, symbol, graph);
-        case vscode.SymbolKind.TypeParameter: // type A = B in Rust. Why???
-            return await generateTypeAliasNode(uri, symbol, graph);
-        default:
-            return;
+    let resolveRaw!: (node: GraphNode | undefined) => void;
+    let rejectRaw!: (error: unknown) => void;
+    const promise = new Promise<GraphNode | undefined>((resolve, reject) => {
+        resolveRaw = resolve;
+        rejectRaw = reject;
+    });
+    graphCache.setRaw(name, promise);
+
+    let result: GraphNode | undefined;
+    try {
+        // Currently this logic only supports Rust
+        // TODO: 1. test on other languages, 2. test on SymbolKind.Class and so on
+        switch (symbol.kind) {
+            case vscode.SymbolKind.Struct:
+                result = await generateStructNode(uri, symbol, graph);
+                break;
+            case vscode.SymbolKind.Enum:
+                result = await generateEnumNode(uri, symbol, graph);
+                break;
+            case vscode.SymbolKind.TypeParameter: // type A = B in Rust. Why???
+                result = await generateTypeAliasNode(uri, symbol, graph);
+                break;
+        }
+    } catch (e) {
+        graphCache.deleteRaw(name);
+        rejectRaw(e);
+        throw e;
     }
+
+    resolveRaw(result);
+    return result;
 }
 
 async function isValidSourceFile(uri: vscode.Uri): Promise<boolean> {
@@ -332,7 +359,6 @@ async function generateStructNode(
         edges: [],
     };
     graph.set(node.id, node);
-    graphCache.setRaw(node.id, node);
 
     for (const child of symbol.children) {
         if (child.kind !== vscode.SymbolKind.Field) continue;
@@ -376,7 +402,6 @@ async function generateEnumNode(
         edges: [],
     };
     graph.set(node.id, node);
-    graphCache.setRaw(node.id, node);
 
     for (const child of symbol.children) {
         if (child.kind !== vscode.SymbolKind.EnumMember) continue;
@@ -422,7 +447,6 @@ async function generateTypeAliasNode(
         edges: [],
     };
     graph.set(node.id, node);
-    graphCache.setRaw(node.id, node);
 
     const childNodes = await generateNodesFromTypeDetail(
         uri,
