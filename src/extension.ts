@@ -8,6 +8,7 @@ let activePanel: vscode.WebviewPanel | undefined;
 let activeRequestId = 0;
 let lastDot = "";
 let debounceTimer: NodeJS.Timeout | undefined;
+let pinned = false;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mornye-insight" is now active!');
@@ -61,6 +62,10 @@ export function activate(context: vscode.ExtensionContext) {
                                 graphCache.invalidate(vscode.window.activeTextEditor.document.uri);
                             }
                             updateGraph();
+                            break;
+                        case "togglePin":
+                            pinned = !pinned;
+                            activePanel?.webview.postMessage({ command: "setPinned", pinned });
                             break;
                     }
                 },
@@ -139,7 +144,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.window.onDidChangeTextEditorSelection((e) => {
-            if (activePanel && e.textEditor === vscode.window.activeTextEditor) {
+            if (activePanel && !pinned && e.textEditor === vscode.window.activeTextEditor) {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
                     updateGraph();

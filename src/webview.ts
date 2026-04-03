@@ -42,12 +42,23 @@ export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.
             display: block;
             border-top: 1px solid #333;
         }
-        #refreshBtn {
+        #toolbar {
             position: absolute; top: 10px; right: 10px; z-index: 300;
-            padding: 6px 12px;
+            display: flex; gap: 4px;
+        }
+        #toolbar button {
+            padding: 4px 10px;
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: none; cursor: pointer; border-radius: 3px;
+            font-size: 12px; font-family: var(--vscode-font-family);
+        }
+        #toolbar button:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+        #pinBtn.pinned {
             background: var(--vscode-button-background);
             color: var(--vscode-button-foreground);
-            border: none; cursor: pointer; border-radius: 2px;
         }
         .node text { fill: var(--vscode-editor-foreground); }
         .edge path { opacity: 0.8; }
@@ -56,7 +67,11 @@ export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.
 <body data-hpcc-uri="${hpccWasmUri}">
     <div id="loading"><div class="spinner"></div><span id="loading-text">Loading...</span></div>
     <div id="logs">Waiting for logs...</div>
-    <button id="refreshBtn">Refresh</button>
+    <div id="toolbar">
+        <button id="pinBtn">Pin</button>
+        <button id="centerBtn">Center</button>
+        <button id="refreshBtn">Refresh</button>
+    </div>
     <div id="graph"></div>
 
     <script type="module" src="${scriptUri}"></script>

@@ -12,7 +12,8 @@ type ExtensionMessage =
     | { command: "status"; text: string }
     | { command: "hideLoading" }
     | { command: "log"; text: string }
-    | { command: "focusNode"; nodeId: string };
+    | { command: "focusNode"; nodeId: string }
+    | { command: "setPinned"; pinned: boolean };
 
 // ─── Minimal D3 typings ──────────────────────────────────────────────────────
 
@@ -227,13 +228,12 @@ function setupButtons(): void {
     const refreshBtn = document.getElementById("refreshBtn");
     if (refreshBtn) refreshBtn.onclick = () => vscodeApi.postMessage({ command: "refresh" });
 
-    if (!document.getElementById("centerBtn")) {
-        const btn = document.createElement("button");
-        btn.id = "centerBtn";
-        btn.textContent = "Center";
-        btn.style.cssText =
-            "position:absolute;top:10px;right:80px;z-index:300;padding:6px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;cursor:pointer;border-radius:2px;";
-        btn.onclick = () => {
+    const pinBtn = document.getElementById("pinBtn");
+    if (pinBtn) pinBtn.onclick = () => vscodeApi.postMessage({ command: "togglePin" });
+
+    const centerBtn = document.getElementById("centerBtn");
+    if (centerBtn) {
+        centerBtn.onclick = () => {
             const svgEl = document.querySelector("#graph svg");
             if (svgEl && zoomBehavior) {
                 d3.select(svgEl)
@@ -242,7 +242,6 @@ function setupButtons(): void {
                     .call(zoomBehavior.transform, d3.zoomIdentity);
             }
         };
-        document.body.appendChild(btn);
     }
 }
 
@@ -295,5 +294,13 @@ window.addEventListener("message", (ev: MessageEvent) => {
         case "focusNode":
             focusNode(msg.nodeId);
             break;
+        case "setPinned": {
+            const pinBtn = document.getElementById("pinBtn");
+            if (pinBtn) {
+                pinBtn.textContent = msg.pinned ? "Unpin" : "Pin";
+                pinBtn.classList.toggle("pinned", msg.pinned);
+            }
+            break;
+        }
     }
 });
